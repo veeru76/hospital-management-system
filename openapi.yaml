@@ -1,0 +1,1702 @@
+openapi: 3.0.0
+
+info:
+  title: Hospital Management System API
+  version: 1.0.0
+  description: |
+    Complete REST API for a Hospital Management System.
+
+    ## Authentication
+    Most endpoints require a JWT **Bearer** token in the `Authorization` header.
+    1. Call `POST /auth/register` or `POST /auth/login` to obtain `accessToken`.
+    2. Click **Authorize** (lock icon) and enter: `Bearer <accessToken>`
+
+    ## Roles & Permissions
+    | Role    | Key Permissions |
+    |---------|----------------|
+    | admin   | Full access to all resources |
+    | doctor  | View patients, manage own appointments / prescriptions / lab reports |
+    | patient | View own profile, book appointments, view own bills & prescriptions |
+    | staff   | Manage appointments, billing, rooms, medicines |
+
+servers:
+  - url: http://localhost:5000/api
+    description: Local Development Server
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "Paste your accessToken here (without the 'Bearer' prefix — Swagger adds it)"
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid access token
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { success: false, message: Access token required }
+    Forbidden:
+      description: Insufficient role permissions
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { success: false, message: You do not have permission to perform this action }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { success: false, message: Resource not found }
+    Conflict:
+      description: Resource already exists
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ValidationError:
+      description: Validation failed
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Error'
+              - type: object
+                properties:
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        field: { type: string }
+                        message: { type: string }
+
+  schemas:
+    # ── Generic wrappers ───────────────────────────────────────────────────────
+    Success:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        message: { type: string, example: Success }
+        data: { type: object }
+
+    Error:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        message: { type: string }
+
+    PaginationMeta:
+      type: object
+      properties:
+        total: { type: integer }
+        page: { type: integer }
+        pages: { type: integer }
+
+    # ── Auth ──────────────────────────────────────────────────────────────────
+    RegisterBody:
+      type: object
+      required: [name, email, password, role]
+      properties:
+        name:     { type: string, example: "John Doe" }
+        email:    { type: string, format: email, example: "john@hospital.com" }
+        password: { type: string, minLength: 6, example: "secret123" }
+        role:
+          type: string
+          enum: [admin, doctor, patient, staff]
+          example: patient
+        phone: { type: string, example: "+91 9876543210" }
+
+    LoginBody:
+      type: object
+      required: [email, password]
+      properties:
+        email:    { type: string, format: email, example: "john@hospital.com" }
+        password: { type: string, example: "secret123" }
+
+    TokenPair:
+      type: object
+      properties:
+        accessToken:  { type: string }
+        refreshToken: { type: string }
+
+    # ── Department ────────────────────────────────────────────────────────────
+    DepartmentBody:
+      type: object
+      required: [name]
+      properties:
+        name:          { type: string, example: Cardiology }
+        description:   { type: string, example: "Heart and cardiovascular care" }
+        location:      { type: string, example: "Block A, Floor 2" }
+        phone:         { type: string, example: "+91 8012345678" }
+        headDoctorId:  { type: string, example: "64abc123def456789" }
+        isActive:      { type: boolean, example: true }
+
+    # ── Patient ───────────────────────────────────────────────────────────────
+    PatientBody:
+      type: object
+      required: [dateOfBirth, gender]
+      properties:
+        userId:      { type: string, description: "Admin only — create for another user" }
+        dateOfBirth: { type: string, format: date, example: "1990-01-15" }
+        gender:
+          type: string
+          enum: [male, female, other]
+          example: male
+        bloodGroup:
+          type: string
+          enum: [A+, A-, B+, B-, AB+, AB-, O+, O-]
+          example: O+
+        address:
+          type: object
+          properties:
+            street:  { type: string, example: "123 Main St" }
+            city:    { type: string, example: Hyderabad }
+            state:   { type: string, example: Telangana }
+            zipCode: { type: string, example: "500001" }
+            country: { type: string, example: India }
+        emergencyContact:
+          type: object
+          properties:
+            name:         { type: string, example: "Jane Doe" }
+            relationship: { type: string, example: Spouse }
+            phone:        { type: string, example: "+91 9123456789" }
+        allergies:
+          type: array
+          items: { type: string }
+          example: [Penicillin, Aspirin]
+        insuranceInfo:
+          type: object
+          properties:
+            provider:     { type: string, example: "Star Health" }
+            policyNumber: { type: string, example: "SH-123456" }
+            expiryDate:   { type: string, format: date, example: "2027-12-31" }
+
+    MedicalHistoryBody:
+      type: object
+      required: [condition]
+      properties:
+        condition:    { type: string, example: "Type 2 Diabetes" }
+        diagnosedDate: { type: string, format: date, example: "2020-03-10" }
+        treatment:    { type: string, example: "Insulin therapy" }
+        notes:        { type: string, example: "Under control with medication" }
+
+    # ── Doctor ────────────────────────────────────────────────────────────────
+    AvailabilitySlot:
+      type: object
+      properties:
+        day:
+          type: string
+          enum: [monday, tuesday, wednesday, thursday, friday, saturday, sunday]
+          example: monday
+        startTime:       { type: string, example: "09:00" }
+        endTime:         { type: string, example: "17:00" }
+        maxAppointments: { type: integer, example: 20 }
+
+    DoctorBody:
+      type: object
+      required: [userId, departmentId, specialization, consultationFee]
+      properties:
+        userId:          { type: string }
+        departmentId:    { type: string }
+        specialization:  { type: string, example: Cardiologist }
+        qualification:
+          type: array
+          items: { type: string }
+          example: [MBBS, MD, DM]
+        experience:      { type: number, example: 10 }
+        consultationFee: { type: number, example: 800 }
+        status:
+          type: string
+          enum: [active, on_leave, inactive]
+          example: active
+        availability:
+          type: array
+          items: { $ref: '#/components/schemas/AvailabilitySlot' }
+
+    AvailabilityBody:
+      type: object
+      required: [availability]
+      properties:
+        availability:
+          type: array
+          items: { $ref: '#/components/schemas/AvailabilitySlot' }
+
+    # ── Appointment ───────────────────────────────────────────────────────────
+    AppointmentBody:
+      type: object
+      required: [patientId, doctorId, departmentId, date, timeSlot]
+      properties:
+        patientId:    { type: string }
+        doctorId:     { type: string }
+        departmentId: { type: string }
+        date:         { type: string, format: date, example: "2026-05-20" }
+        timeSlot:
+          type: object
+          required: [startTime, endTime]
+          properties:
+            startTime: { type: string, example: "10:00" }
+            endTime:   { type: string, example: "10:30" }
+        type:
+          type: string
+          enum: [in_person, teleconsultation, follow_up, emergency]
+          example: in_person
+        reason: { type: string, example: "Chest pain and shortness of breath" }
+
+    AppointmentUpdate:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [scheduled, confirmed, completed, cancelled, no_show]
+          example: confirmed
+        notes: { type: string }
+        date:  { type: string, format: date }
+        timeSlot:
+          type: object
+          properties:
+            startTime: { type: string }
+            endTime:   { type: string }
+        type:
+          type: string
+          enum: [in_person, teleconsultation, follow_up, emergency]
+
+    # ── Billing ───────────────────────────────────────────────────────────────
+    BillingBody:
+      type: object
+      required: [patientId, appointmentId, items]
+      properties:
+        patientId:    { type: string }
+        appointmentId: { type: string }
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [description, amount]
+            properties:
+              description: { type: string, example: "Consultation fee" }
+              amount:      { type: number, example: 800 }
+              quantity:    { type: integer, example: 1 }
+        tax:           { type: number, example: 80 }
+        discount:      { type: number, example: 0 }
+        paymentMethod:
+          type: string
+          enum: [cash, card, upi, insurance, online]
+
+    PaymentBody:
+      type: object
+      required: [paymentStatus]
+      properties:
+        paymentStatus:
+          type: string
+          enum: [pending, paid, partial, refunded, cancelled]
+          example: paid
+        paymentMethod:
+          type: string
+          enum: [cash, card, upi, insurance, online]
+          example: card
+
+    # ── Lab Report ────────────────────────────────────────────────────────────
+    LabResultParam:
+      type: object
+      properties:
+        parameter:   { type: string, example: Hemoglobin }
+        value:       { type: string, example: "13.5" }
+        unit:        { type: string, example: g/dL }
+        normalRange: { type: string, example: "12-17" }
+        isAbnormal:  { type: boolean, example: false }
+
+    LabReportBody:
+      type: object
+      required: [patientId, doctorId, appointmentId, testName, testCategory]
+      properties:
+        patientId:    { type: string }
+        doctorId:     { type: string }
+        appointmentId: { type: string }
+        testName:     { type: string, example: "Complete Blood Count" }
+        testCategory:
+          type: string
+          enum: [blood, urine, imaging, pathology, microbiology, other]
+          example: blood
+        results:
+          type: array
+          items: { $ref: '#/components/schemas/LabResultParam' }
+        remarks:     { type: string, example: "All values within normal range" }
+        conductedAt: { type: string, format: date-time }
+
+    LabReportUpdate:
+      type: object
+      properties:
+        results:
+          type: array
+          items: { $ref: '#/components/schemas/LabResultParam' }
+        status:
+          type: string
+          enum: [pending, processing, completed, cancelled]
+          example: completed
+        remarks: { type: string }
+
+    # ── Prescription ──────────────────────────────────────────────────────────
+    PrescribedMedicine:
+      type: object
+      required: [medicineId, dosage, frequency, duration]
+      properties:
+        medicineId:   { type: string }
+        dosage:       { type: string, example: "500mg" }
+        frequency:    { type: string, example: "Twice daily" }
+        duration:     { type: string, example: "7 days" }
+        instructions: { type: string, example: "Take after food" }
+
+    PrescriptionBody:
+      type: object
+      required: [patientId, doctorId, appointmentId, diagnosis, medicines]
+      properties:
+        patientId:    { type: string }
+        doctorId:     { type: string }
+        appointmentId: { type: string }
+        diagnosis:    { type: string, example: "Acute pharyngitis" }
+        medicines:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/PrescribedMedicine' }
+        notes: { type: string, example: "Rest and drink plenty of fluids" }
+
+    # ── Medicine ──────────────────────────────────────────────────────────────
+    MedicineBody:
+      type: object
+      required: [name, category, price, stock, expiryDate]
+      properties:
+        name:        { type: string, example: Amoxicillin }
+        genericName: { type: string, example: "Amoxicillin Trihydrate" }
+        category:
+          type: string
+          enum: [antibiotic, analgesic, antiviral, antifungal, antihypertensive, antidiabetic, vitamin, supplement, other]
+          example: antibiotic
+        manufacturer:          { type: string, example: Cipla }
+        price:                 { type: number, example: 85 }
+        stock:                 { type: integer, example: 500 }
+        expiryDate:            { type: string, format: date, example: "2027-12-31" }
+        requiresPrescription:  { type: boolean, example: true }
+
+    StockBody:
+      type: object
+      required: [quantity, operation]
+      properties:
+        quantity:  { type: integer, minimum: 1, example: 100 }
+        operation:
+          type: string
+          enum: [add, subtract]
+          example: add
+
+    # ── Room ──────────────────────────────────────────────────────────────────
+    BedSpec:
+      type: object
+      properties:
+        bedNo: { type: string, example: "A" }
+
+    RoomBody:
+      type: object
+      required: [roomNumber, departmentId, type, floor, ratePerDay]
+      properties:
+        roomNumber:   { type: string, example: "101-A" }
+        departmentId: { type: string }
+        type:
+          type: string
+          enum: [general, private, icu, emergency, operation_theatre, laboratory]
+          example: general
+        floor:      { type: integer, example: 1 }
+        beds:
+          type: array
+          items: { $ref: '#/components/schemas/BedSpec' }
+        ratePerDay: { type: number, example: 2000 }
+        status:
+          type: string
+          enum: [available, occupied, maintenance, reserved]
+
+    BedAssignBody:
+      type: object
+      required: [bedNo, patientId]
+      properties:
+        bedNo:     { type: string, example: "A" }
+        patientId: { type: string }
+
+    BedReleaseBody:
+      type: object
+      required: [bedNo]
+      properties:
+        bedNo: { type: string, example: "A" }
+
+    # ── Staff ─────────────────────────────────────────────────────────────────
+    StaffBody:
+      type: object
+      required: [userId, departmentId, position, shift, joiningDate, salary]
+      properties:
+        userId:       { type: string }
+        departmentId: { type: string }
+        position:
+          type: string
+          enum: [nurse, receptionist, lab_technician, pharmacist, accountant, cleaner, security, other]
+          example: nurse
+        shift:
+          type: string
+          enum: [morning, afternoon, night, rotating]
+          example: morning
+        joiningDate: { type: string, format: date, example: "2026-01-01" }
+        salary:      { type: number, example: 35000 }
+        isActive:    { type: boolean, example: true }
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: Auth
+    description: Register, login, token management
+  - name: Departments
+    description: Hospital department CRUD
+  - name: Patients
+    description: Patient profiles and medical history
+  - name: Doctors
+    description: Doctor profiles and availability
+  - name: Appointments
+    description: Scheduling and slot management
+  - name: Billing
+    description: Invoices and payment tracking
+  - name: Lab Reports
+    description: Laboratory test results
+  - name: Prescriptions
+    description: Doctor prescriptions
+  - name: Medicines
+    description: Medicine inventory and stock
+  - name: Rooms
+    description: Room and bed management
+  - name: Staff
+    description: Hospital staff management
+
+paths:
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # AUTH
+  # ════════════════════════════════════════════════════════════════════════════
+
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new user
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterBody' }
+            example:
+              name: Alice Smith
+              email: alice@hospital.com
+              password: password123
+              role: patient
+              phone: "+91 9876543210"
+      responses:
+        '201':
+          description: Registered successfully — returns user info + token pair
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      user:
+                        type: object
+                        properties:
+                          id: { type: string }
+                          name: { type: string }
+                          email: { type: string }
+                          role: { type: string }
+                      accessToken: { type: string }
+                      refreshToken: { type: string }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login with email and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginBody' }
+            example:
+              email: alice@hospital.com
+              password: password123
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    allOf:
+                      - type: object
+                        properties:
+                          user: { type: object }
+                      - $ref: '#/components/schemas/TokenPair'
+        '401':
+          description: Invalid email or password
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: Account is deactivated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /auth/refresh-token:
+    post:
+      tags: [Auth]
+      summary: Refresh access token using refresh token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200':
+          description: New token pair issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: '#/components/schemas/TokenPair' }
+        '400':
+          description: Refresh token missing
+        '401':
+          description: Invalid or expired refresh token
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout — invalidates the stored refresh token
+      responses:
+        '200':
+          description: Logged out successfully
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Get the current authenticated user's info
+      responses:
+        '200':
+          description: Current user data
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # DEPARTMENTS
+  # ════════════════════════════════════════════════════════════════════════════
+
+  /departments:
+    get:
+      tags: [Departments]
+      summary: List all active departments
+      responses:
+        '200':
+          description: Array of departments
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+    post:
+      tags: [Departments]
+      summary: Create department  (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepartmentBody' }
+            example:
+              name: Cardiology
+              description: Heart and cardiovascular care
+              location: "Block A, Floor 2"
+              phone: "+91 8012345678"
+      responses:
+        '201':
+          description: Department created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /departments/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+
+    get:
+      tags: [Departments]
+      summary: Get a department by ID
+      responses:
+        '200':  { description: Department details, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+    put:
+      tags: [Departments]
+      summary: Update department  (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepartmentBody' }
+      responses:
+        '200':  { description: Updated department, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+        '422':  { $ref: '#/components/responses/ValidationError' }
+
+    delete:
+      tags: [Departments]
+      summary: Deactivate department  (admin)
+      responses:
+        '200':  { description: Deactivated }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PATIENTS
+  # ════════════════════════════════════════════════════════════════════════════
+
+  /patients/me:
+    get:
+      tags: [Patients]
+      summary: Get own patient profile  (patient)
+      responses:
+        '200':  { description: Own patient profile, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+  /patients:
+    get:
+      tags: [Patients]
+      summary: List all patients  (admin / doctor / staff)
+      parameters:
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 10 } }
+      responses:
+        '200':
+          description: Paginated patients
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+    post:
+      tags: [Patients]
+      summary: Create patient profile  (admin or self-registration for patient role)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PatientBody' }
+            example:
+              dateOfBirth: "1990-01-15"
+              gender: male
+              bloodGroup: O+
+              address:
+                street: "123 Main St"
+                city: Hyderabad
+                state: Telangana
+                zipCode: "500001"
+                country: India
+              emergencyContact:
+                name: "Jane Doe"
+                relationship: Spouse
+                phone: "+91 9123456789"
+              allergies: [Penicillin]
+      responses:
+        '201':
+          description: Patient profile created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /patients/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+
+    get:
+      tags: [Patients]
+      summary: Get patient by ID  (admin / doctor / staff / own patient)
+      responses:
+        '200':  { description: Patient details, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+    put:
+      tags: [Patients]
+      summary: Update patient profile  (admin or own patient)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PatientBody' }
+      responses:
+        '200':  { description: Updated patient, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+    delete:
+      tags: [Patients]
+      summary: Delete patient record  (admin)
+      responses:
+        '200':  { description: Deleted }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+  /patients/{id}/medical-history:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+
+    post:
+      tags: [Patients]
+      summary: Add medical history entry  (admin / doctor)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MedicalHistoryBody' }
+            example:
+              condition: "Type 2 Diabetes"
+              diagnosedDate: "2020-03-10"
+              treatment: "Insulin therapy"
+              notes: "Under control with medication"
+      responses:
+        '200':  { description: History added, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+        '422':  { $ref: '#/components/responses/ValidationError' }
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # DOCTORS
+  # ════════════════════════════════════════════════════════════════════════════
+
+  /doctors/me:
+    get:
+      tags: [Doctors]
+      summary: Get own doctor profile  (doctor)
+      responses:
+        '200':  { description: Doctor profile, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+  /doctors:
+    get:
+      tags: [Doctors]
+      summary: List all doctors
+      parameters:
+        - { name: departmentId, in: query, schema: { type: string } }
+        - { name: specialization, in: query, schema: { type: string }, description: "Partial match (case-insensitive)" }
+        - { name: status, in: query, schema: { type: string, enum: [active, on_leave, inactive], default: active } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 10 } }
+      responses:
+        '200':
+          description: Paginated doctors
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+    post:
+      tags: [Doctors]
+      summary: Create doctor profile  (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DoctorBody' }
+            example:
+              userId: "64abc000000000000000001"
+              departmentId: "64abc000000000000000002"
+              specialization: Cardiologist
+              qualification: [MBBS, MD, DM]
+              experience: 10
+              consultationFee: 800
+              availability:
+                - day: monday
+                  startTime: "09:00"
+                  endTime: "17:00"
+                  maxAppointments: 20
+                - day: wednesday
+                  startTime: "09:00"
+                  endTime: "13:00"
+                  maxAppointments: 10
+      responses:
+        '201':
+          description: Doctor profile created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /doctors/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+
+    get:
+      tags: [Doctors]
+      summary: Get doctor by ID
+      responses:
+        '200':  { description: Doctor details, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+    put:
+      tags: [Doctors]
+      summary: Update doctor profile  (admin or own doctor)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DoctorBody' }
+      responses:
+        '200':  { description: Updated doctor, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+    delete:
+      tags: [Doctors]
+      summary: Deactivate doctor  (admin)
+      responses:
+        '200':  { description: Deactivated }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+  /doctors/{id}/availability:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+
+    put:
+      tags: [Doctors]
+      summary: Replace availability schedule  (admin or own doctor)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AvailabilityBody' }
+            example:
+              availability:
+                - day: tuesday
+                  startTime: "10:00"
+                  endTime: "16:00"
+                  maxAppointments: 15
+                - day: thursday
+                  startTime: "10:00"
+                  endTime: "14:00"
+                  maxAppointments: 10
+      responses:
+        '200':  { description: Availability updated, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # APPOINTMENTS
+  # ════════════════════════════════════════════════════════════════════════════
+
+  /appointments/available-slots:
+    get:
+      tags: [Appointments]
+      summary: Get available 30-min time slots for a doctor on a given date
+      parameters:
+        - { name: doctorId, in: query, required: true, schema: { type: string } }
+        - { name: date, in: query, required: true, schema: { type: string, format: date }, example: "2026-05-20" }
+      responses:
+        '200':
+          description: Array of slots with booking status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      slots:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            startTime: { type: string, example: "09:00" }
+                            endTime:   { type: string, example: "09:30" }
+                            isBooked:  { type: boolean, example: false }
+        '400':
+          description: Missing doctorId or date query params
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /appointments:
+    get:
+      tags: [Appointments]
+      summary: List appointments (auto-filtered by role)
+      description: |
+        - **admin/staff**: see all (optionally filter by doctorId, patientId)
+        - **doctor**: sees only own appointments
+        - **patient**: sees only own appointments
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [scheduled, confirmed, completed, cancelled, no_show] } }
+        - { name: date, in: query, schema: { type: string, format: date } }
+        - { name: doctorId, in: query, schema: { type: string }, description: "Admin/staff only" }
+        - { name: patientId, in: query, schema: { type: string }, description: "Admin/staff only" }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 10 } }
+      responses:
+        '200':
+          description: Paginated appointments
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+    post:
+      tags: [Appointments]
+      summary: Book an appointment  (admin / patient / staff)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AppointmentBody' }
+            example:
+              patientId: "64abc000000000000000010"
+              doctorId: "64abc000000000000000011"
+              departmentId: "64abc000000000000000012"
+              date: "2026-05-20"
+              timeSlot:
+                startTime: "10:00"
+                endTime: "10:30"
+              type: in_person
+              reason: "Chest pain and shortness of breath"
+      responses:
+        '201':
+          description: Appointment booked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '400':
+          description: Doctor not active / available
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Time slot already booked
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /appointments/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+
+    get:
+      tags: [Appointments]
+      summary: Get appointment by ID
+      responses:
+        '200':  { description: Appointment details, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+    put:
+      tags: [Appointments]
+      summary: Update appointment status / details  (admin / doctor / staff)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AppointmentUpdate' }
+            example:
+              status: confirmed
+              notes: "Patient confirmed via phone"
+      responses:
+        '200':  { description: Updated appointment, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+  /appointments/{id}/cancel:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+
+    patch:
+      tags: [Appointments]
+      summary: Cancel appointment  (all roles — patients can only cancel their own)
+      responses:
+        '200':
+          description: Appointment cancelled
+        '400':
+          description: Cannot cancel a completed or already-cancelled appointment
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # BILLING
+  # ════════════════════════════════════════════════════════════════════════════
+
+  /billing/summary:
+    get:
+      tags: [Billing]
+      summary: Revenue summary grouped by payment status  (admin / staff)
+      responses:
+        '200':
+          description: Aggregated billing summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        _id:   { type: string, example: paid }
+                        count: { type: integer }
+                        total: { type: number }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /billing:
+    get:
+      tags: [Billing]
+      summary: List invoices  (patients see only own)
+      parameters:
+        - { name: patientId, in: query, schema: { type: string }, description: "Admin/staff only" }
+        - { name: paymentStatus, in: query, schema: { type: string, enum: [pending, paid, partial, refunded, cancelled] } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 10 } }
+      responses:
+        '200':
+          description: Paginated invoices
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+    post:
+      tags: [Billing]
+      summary: Create invoice  (admin / staff)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BillingBody' }
+            example:
+              patientId: "64abc000000000000000010"
+              appointmentId: "64abc000000000000000020"
+              items:
+                - description: "Consultation fee"
+                  amount: 800
+                  quantity: 1
+                - description: "ECG test"
+                  amount: 500
+                  quantity: 1
+              tax: 130
+              discount: 0
+              paymentMethod: card
+      responses:
+        '201':
+          description: Invoice created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /billing/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+
+    get:
+      tags: [Billing]
+      summary: Get invoice by ID  (patients see only own)
+      responses:
+        '200':  { description: Invoice details, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+  /billing/{id}/payment:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+
+    patch:
+      tags: [Billing]
+      summary: Update payment status  (admin / staff)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PaymentBody' }
+            example:
+              paymentStatus: paid
+              paymentMethod: upi
+      responses:
+        '200':  { description: Payment status updated, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+        '422':  { $ref: '#/components/responses/ValidationError' }
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # LAB REPORTS
+  # ════════════════════════════════════════════════════════════════════════════
+
+  /lab-reports:
+    get:
+      tags: [Lab Reports]
+      summary: List lab reports (role-filtered)
+      parameters:
+        - { name: patientId, in: query, schema: { type: string }, description: "Admin only" }
+        - { name: status, in: query, schema: { type: string, enum: [pending, processing, completed, cancelled] } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 10 } }
+      responses:
+        '200':
+          description: Paginated lab reports
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+    post:
+      tags: [Lab Reports]
+      summary: Create lab report  (admin / doctor / staff)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LabReportBody' }
+            example:
+              patientId: "64abc000000000000000010"
+              doctorId: "64abc000000000000000011"
+              appointmentId: "64abc000000000000000020"
+              testName: "Complete Blood Count"
+              testCategory: blood
+              results:
+                - parameter: Hemoglobin
+                  value: "13.5"
+                  unit: g/dL
+                  normalRange: "12-17"
+                  isAbnormal: false
+                - parameter: WBC
+                  value: "11.2"
+                  unit: "10^3/µL"
+                  normalRange: "4-11"
+                  isAbnormal: true
+              remarks: "Slightly elevated WBC — monitor for infection"
+      responses:
+        '201':
+          description: Lab report created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /lab-reports/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+
+    get:
+      tags: [Lab Reports]
+      summary: Get lab report by ID
+      responses:
+        '200':  { description: Lab report details, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+    put:
+      tags: [Lab Reports]
+      summary: Update lab report results / status  (admin / doctor / staff)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LabReportUpdate' }
+            example:
+              status: completed
+              remarks: "All values within normal range"
+      responses:
+        '200':  { description: Report updated, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PRESCRIPTIONS
+  # ════════════════════════════════════════════════════════════════════════════
+
+  /prescriptions:
+    get:
+      tags: [Prescriptions]
+      summary: List prescriptions (role-filtered)
+      parameters:
+        - { name: patientId, in: query, schema: { type: string }, description: "Admin only" }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 10 } }
+      responses:
+        '200':
+          description: Paginated prescriptions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+    post:
+      tags: [Prescriptions]
+      summary: Create prescription  (admin / doctor)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrescriptionBody' }
+            example:
+              patientId: "64abc000000000000000010"
+              doctorId: "64abc000000000000000011"
+              appointmentId: "64abc000000000000000020"
+              diagnosis: "Acute pharyngitis"
+              medicines:
+                - medicineId: "64abc000000000000000030"
+                  dosage: "500mg"
+                  frequency: "Twice daily"
+                  duration: "7 days"
+                  instructions: "Take after food"
+              notes: "Rest and drink plenty of fluids"
+      responses:
+        '201':
+          description: Prescription created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /prescriptions/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+
+    get:
+      tags: [Prescriptions]
+      summary: Get prescription by ID
+      responses:
+        '200':  { description: Prescription details, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+    put:
+      tags: [Prescriptions]
+      summary: Update prescription  (admin / doctor)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrescriptionBody' }
+      responses:
+        '200':  { description: Prescription updated, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # MEDICINES
+  # ════════════════════════════════════════════════════════════════════════════
+
+  /medicines:
+    get:
+      tags: [Medicines]
+      summary: List medicines
+      parameters:
+        - { name: category, in: query, schema: { type: string, enum: [antibiotic, analgesic, antiviral, antifungal, antihypertensive, antidiabetic, vitamin, supplement, other] } }
+        - { name: search, in: query, schema: { type: string }, description: "Search by name (partial match)" }
+        - { name: lowStock, in: query, schema: { type: boolean }, description: "Filter items with stock ≤ 10" }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 10 } }
+      responses:
+        '200':
+          description: Paginated medicines
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+    post:
+      tags: [Medicines]
+      summary: Add medicine to inventory  (admin / staff)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MedicineBody' }
+            example:
+              name: Amoxicillin
+              genericName: "Amoxicillin Trihydrate"
+              category: antibiotic
+              manufacturer: Cipla
+              price: 85
+              stock: 500
+              expiryDate: "2027-12-31"
+              requiresPrescription: true
+      responses:
+        '201':
+          description: Medicine added
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /medicines/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+
+    get:
+      tags: [Medicines]
+      summary: Get medicine by ID
+      responses:
+        '200':  { description: Medicine details, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+    put:
+      tags: [Medicines]
+      summary: Update medicine details  (admin / staff)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MedicineBody' }
+      responses:
+        '200':  { description: Medicine updated, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+    delete:
+      tags: [Medicines]
+      summary: Delete medicine from inventory  (admin)
+      responses:
+        '200':  { description: Deleted }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+  /medicines/{id}/stock:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+
+    patch:
+      tags: [Medicines]
+      summary: Add or subtract stock  (admin / staff)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StockBody' }
+            example:
+              quantity: 200
+              operation: add
+      responses:
+        '200':
+          description: Stock updated — returns new stock count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      stock: { type: integer }
+        '400':
+          description: Insufficient stock (for subtract)
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # ROOMS
+  # ════════════════════════════════════════════════════════════════════════════
+
+  /rooms:
+    get:
+      tags: [Rooms]
+      summary: List rooms  (admin / doctor / staff)
+      parameters:
+        - { name: type, in: query, schema: { type: string, enum: [general, private, icu, emergency, operation_theatre, laboratory] } }
+        - { name: status, in: query, schema: { type: string, enum: [available, occupied, maintenance, reserved] } }
+        - { name: departmentId, in: query, schema: { type: string } }
+        - { name: floor, in: query, schema: { type: integer } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 10 } }
+      responses:
+        '200':
+          description: Paginated rooms
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+    post:
+      tags: [Rooms]
+      summary: Create room  (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RoomBody' }
+            example:
+              roomNumber: "101-A"
+              departmentId: "64abc000000000000000002"
+              type: general
+              floor: 1
+              beds:
+                - bedNo: "A"
+                - bedNo: "B"
+                - bedNo: "C"
+              ratePerDay: 2000
+      responses:
+        '201':
+          description: Room created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /rooms/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+
+    get:
+      tags: [Rooms]
+      summary: Get room by ID with bed occupancy details
+      responses:
+        '200':  { description: Room details, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+    put:
+      tags: [Rooms]
+      summary: Update room  (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RoomBody' }
+      responses:
+        '200':  { description: Room updated, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+    delete:
+      tags: [Rooms]
+      summary: Delete room  (admin)
+      responses:
+        '200':  { description: Deleted }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+  /rooms/{id}/assign-bed:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+
+    patch:
+      tags: [Rooms]
+      summary: Assign a bed to a patient  (admin / doctor / staff)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BedAssignBody' }
+            example:
+              bedNo: "A"
+              patientId: "64abc000000000000000010"
+      responses:
+        '200':  { description: Bed assigned, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '400':  { description: Bed already occupied or not found }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+        '422':  { $ref: '#/components/responses/ValidationError' }
+
+  /rooms/{id}/release-bed:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+
+    patch:
+      tags: [Rooms]
+      summary: Release an occupied bed  (admin / doctor / staff)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BedReleaseBody' }
+            example:
+              bedNo: "A"
+      responses:
+        '200':  { description: Bed released, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '400':  { description: Bed is not occupied }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+        '422':  { $ref: '#/components/responses/ValidationError' }
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # STAFF
+  # ════════════════════════════════════════════════════════════════════════════
+
+  /staff/me:
+    get:
+      tags: [Staff]
+      summary: Get own staff profile  (staff)
+      responses:
+        '200':  { description: Staff profile, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+  /staff:
+    get:
+      tags: [Staff]
+      summary: List all staff members  (admin)
+      parameters:
+        - { name: departmentId, in: query, schema: { type: string } }
+        - { name: position, in: query, schema: { type: string, enum: [nurse, receptionist, lab_technician, pharmacist, accountant, cleaner, security, other] } }
+        - { name: shift, in: query, schema: { type: string, enum: [morning, afternoon, night, rotating] } }
+        - { name: isActive, in: query, schema: { type: boolean } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 10 } }
+      responses:
+        '200':
+          description: Paginated staff
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+    post:
+      tags: [Staff]
+      summary: Create staff profile  (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StaffBody' }
+            example:
+              userId: "64abc000000000000000050"
+              departmentId: "64abc000000000000000002"
+              position: nurse
+              shift: morning
+              joiningDate: "2026-01-01"
+              salary: 35000
+      responses:
+        '201':
+          description: Staff profile created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /staff/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+
+    get:
+      tags: [Staff]
+      summary: Get staff member by ID  (admin or own staff)
+      responses:
+        '200':  { description: Staff details, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+    put:
+      tags: [Staff]
+      summary: Update staff member  (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StaffBody' }
+      responses:
+        '200':  { description: Staff updated, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
+
+    delete:
+      tags: [Staff]
+      summary: Deactivate staff member  (admin)
+      responses:
+        '200':  { description: Deactivated }
+        '401':  { $ref: '#/components/responses/Unauthorized' }
+        '403':  { $ref: '#/components/responses/Forbidden' }
+        '404':  { $ref: '#/components/responses/NotFound' }
