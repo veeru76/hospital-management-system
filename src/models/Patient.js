@@ -1,59 +1,33 @@
 const mongoose = require('mongoose');
 
-const medicalHistorySchema = new mongoose.Schema(
-  {
-    condition: String,
-    diagnosedDate: Date,
-    treatment: String,
-    notes: String,
-  },
-  { _id: false }
-);
-
 const addressSchema = new mongoose.Schema(
-  {
-    street: String,
-    city: String,
-    state: String,
-    zipCode: String,
-    country: String,
-  },
+  { street: String, city: String, state: String, zipCode: String, country: String },
   { _id: false }
 );
 
 const emergencyContactSchema = new mongoose.Schema(
-  {
-    name: String,
-    relationship: String,
-    phone: String,
-  },
+  { name: String, relationship: String, phone: String },
   { _id: false }
 );
 
-const insuranceInfoSchema = new mongoose.Schema(
-  {
-    provider: String,
-    policyNumber: String,
-    expiryDate: Date,
-  },
+const medicalHistorySchema = new mongoose.Schema(
+  { condition: String, diagnosedDate: Date, treatment: String, notes: String },
   { _id: false }
 );
 
 const patientSchema = new mongoose.Schema(
   {
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    patientId: { type: String, unique: true },
-    dateOfBirth: { type: Date, required: true },
-    gender: { type: String, enum: ['male', 'female', 'other'], required: true },
-    bloodGroup: {
-      type: String,
-      enum: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'],
-    },
-    address: addressSchema,
+    patientId:        { type: String, unique: true },
+    name:             { type: String, required: true, trim: true },
+    email:            { type: String, trim: true, lowercase: true },
+    phone:            { type: String, trim: true },
+    dateOfBirth:      { type: Date, required: true },
+    gender:           { type: String, enum: ['male', 'female', 'other'], required: true },
+    bloodGroup:       { type: String, enum: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] },
+    address:          addressSchema,
     emergencyContact: emergencyContactSchema,
-    medicalHistory: [medicalHistorySchema],
-    allergies: [String],
-    insuranceInfo: insuranceInfoSchema,
+    medicalHistory:   [medicalHistorySchema],
+    allergies:        [String],
   },
   { timestamps: true }
 );
